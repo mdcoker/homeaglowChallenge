@@ -131,8 +131,13 @@ export async function fetchRateConfig(params: {
 export async function submitRate(params: {
   applicantId: string;
   request: SubmitRateRequest;
+  /**
+   * Stops the client waiting for the response. With a real server the write may still have
+   * landed, which is fine: the next fetch returns it as `current`.
+   */
+  signal?: AbortSignal;
 }): Promise<SavedRate> {
-  await wait(mockOptions.latencyMs);
+  await wait(mockOptions.latencyMs, params.signal);
 
   if (mockOptions.failSubmit) {
     throw new ApiError("We couldn't save your rate. Please try again.", true);

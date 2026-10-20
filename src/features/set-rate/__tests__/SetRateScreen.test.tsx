@@ -6,7 +6,7 @@ import * as api from '~/api/rates';
 
 const applicantId = 'applicant-123';
 
-beforeEach(() => api.resetMockApi({ latencyMs: 0 }));
+beforeEach(() => api.resetMockApi({ latencyMs: 0, failFetch: false, failSubmit: false }));
 afterEach(() => jest.restoreAllMocks());
 
 async function renderScreen(state = 'TX') {
@@ -160,6 +160,7 @@ describe('SetRateScreen', () => {
       expect(submitSpy).toHaveBeenCalledWith({
         applicantId,
         request: { policy: 'marketing-fee', hourlyRate: 21 },
+        signal: expect.any(AbortSignal),
       });
     });
   });
@@ -187,7 +188,7 @@ describe('SetRateScreen', () => {
       );
     });
 
-    it('seeds the new-client rate from the hourly rate and submits it', async () => {
+    it('starts the new-client rate at the hourly rate and submits it', async () => {
       const user = userEvent.setup();
       const { onContinue } = await renderScreen('CA');
 
@@ -216,6 +217,63 @@ describe('SetRateScreen', () => {
       expect(screen.queryByText('New clients')).not.toBeOnTheScreen();
     });
 
+    it('follows the hourly rate until a new-client rate is chosen', async () => {
+      const user = userEvent.setup();
+      await renderScreen('CA');
+      await fireEvent(toggle(), 'valueChange', true);
+
+      await user.press(screen.getByRole('button', { name: 'Increase hourly rate' }));
+
+      expect(screen.getByRole('adjustable', { name: 'New client rate' })).toHaveAccessibilityValue({
+        text: '$21 per hour',
+      });
+    });
+
+    it('keeps a chosen new-client rate when the hourly rate changes', async () => {
+      const user = userEvent.setup();
+      await renderScreen('CA');
+      await fireEvent(toggle(), 'valueChange', true);
+      await user.press(screen.getByRole('button', { name: 'Decrease new client rate' }));
+
+      await user.press(screen.getByRole('button', { name: 'Increase hourly rate' }));
+
+      expect(screen.getByRole('adjustable', { name: 'New client rate' })).toHaveAccessibilityValue({
+        text: '$19 per hour',
+      });
+    });
+
+    it('keeps a chosen new-client rate when toggled off and back on', async () => {
+      const user = userEvent.setup();
+      const { onContinue } = await renderScreen('CA');
+      await fireEvent(toggle(), 'valueChange', true);
+      await user.press(screen.getByRole('button', { name: 'Increase new client rate' }));
+
+      await fireEvent(toggle(), 'valueChange', false);
+      await fireEvent(toggle(), 'valueChange', true);
+
+      expect(screen.getByRole('adjustable', { name: 'New client rate' })).toHaveAccessibilityValue({
+        text: '$21 per hour',
+      });
+      await user.press(continueButton());
+      await waitFor(() =>
+        expect(onContinue).toHaveBeenCalledWith({ hourlyRate: 20, newClientRate: 21 })
+      );
+    });
+
+    it('does not submit a chosen new-client rate while toggled off', async () => {
+      const user = userEvent.setup();
+      const { onContinue } = await renderScreen('CA');
+      await fireEvent(toggle(), 'valueChange', true);
+      await user.press(screen.getByRole('button', { name: 'Increase new client rate' }));
+      await fireEvent(toggle(), 'valueChange', false);
+
+      await user.press(continueButton());
+
+      await waitFor(() =>
+        expect(onContinue).toHaveBeenCalledWith({ hourlyRate: 20, newClientRate: null })
+      );
+    });
+
     it('restores a previously saved custom rate', async () => {
       await api.submitRate({
         applicantId,
@@ -233,6 +291,30 @@ describe('SetRateScreen', () => {
   });
 
   describe('continuing', () => {
+    it('cancels an in-flight save on unmount and does not continue', async () => {
+      const user = userEvent.setup();
+      const submitSpy = jest.spyOn(api, 'submitRate');
+      const onContinue = jest.fn();
+      const { unmount } = await render(
+        <SetRateScreen
+          applicantId={applicantId}
+          applicantState="TX"
+          onBack={jest.fn()}
+          onContinue={onContinue}
+        />
+      );
+      await screen.findByText('Set your hourly rate');
+      api.mockOptions.latencyMs = 60_000;
+
+      await user.press(continueButton());
+      await unmount();
+
+      expect(submitSpy.mock.calls[0][0].signal?.aborted).toBe(true);
+      // Let the aborted request settle; it must not reach onContinue.
+      await expect(submitSpy.mock.results[0].value).rejects.toThrow('Aborted');
+      expect(onContinue).not.toHaveBeenCalled();
+    });
+
     it('shows progress and blocks repeat presses while saving', async () => {
       const user = userEvent.setup();
       const submitSpy = jest.spyOn(api, 'submitRate');
@@ -280,6 +362,58 @@ describe('SetRateScreen', () => {
       await user.press(continueButton());
 
       expect(await screen.findByRole('alert', { name: 'Something went wrong.' })).toBeOnTheScreen();
+    });
+
+    describe('clearing a save error once the values are edited', () => {
+      const toggle = () =>
+        screen.getByRole('switch', { name: 'Set a custom rate for new clients' });
+
+      async function failSave() {
+        const user = userEvent.setup();
+        api.mockOptions.failSubmit = true;
+        await user.press(continueButton());
+        await screen.findByRole('alert');
+        return user;
+      }
+
+      it('clears when the hourly rate changes', async () => {
+        await renderScreen();
+        const user = await failSave();
+
+        await user.press(screen.getByRole('button', { name: 'Increase hourly rate' }));
+
+        expect(screen.queryByRole('alert')).not.toBeOnTheScreen();
+      });
+
+      it('clears when the new-client toggle changes', async () => {
+        await renderScreen('CA');
+        await failSave();
+
+        await fireEvent(toggle(), 'valueChange', true);
+
+        expect(screen.queryByRole('alert')).not.toBeOnTheScreen();
+      });
+
+      it('clears when the new-client rate changes', async () => {
+        await renderScreen('CA');
+        await fireEvent(toggle(), 'valueChange', true);
+        const user = await failSave();
+
+        await user.press(screen.getByRole('button', { name: 'Increase new client rate' }));
+
+        expect(screen.queryByRole('alert')).not.toBeOnTheScreen();
+      });
+
+      it('stays visible when nothing is edited', async () => {
+        await renderScreen();
+        const user = await failSave();
+
+        await user.press(
+          screen.getByRole('button', { name: 'How is the recommended rate calculated?' })
+        );
+
+        expect(screen.getByRole('alert')).toBeOnTheScreen();
+      });
     });
   });
 });

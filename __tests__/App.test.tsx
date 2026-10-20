@@ -19,7 +19,7 @@ jest.mock('expo-splash-screen', () => ({
 const mockUseFonts = jest.mocked(useFonts);
 
 beforeEach(() => {
-  resetMockApi({ latencyMs: 0 });
+  resetMockApi({ latencyMs: 0, failFetch: false, failSubmit: false });
   jest.mocked(SplashScreen.hideAsync).mockClear();
 });
 afterEach(() => jest.restoreAllMocks());

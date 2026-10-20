@@ -4,7 +4,7 @@ import { useRateConfig } from '../useRateConfig';
 
 import * as api from '~/api/rates';
 
-beforeEach(() => api.resetMockApi({ latencyMs: 0 }));
+beforeEach(() => api.resetMockApi({ latencyMs: 0, failFetch: false, failSubmit: false }));
 afterEach(() => jest.restoreAllMocks());
 
 describe('useRateConfig', () => {

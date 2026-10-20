@@ -1,6 +1,6 @@
 import Feather from '@expo/vector-icons/Feather';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
@@ -80,17 +80,34 @@ const SetRateForm = ({
   const [customNewClientRateEnabled, setCustomNewClientRateEnabled] = useState(
     config.current?.newClientRate != null
   );
-  const [newClientRate, setNewClientRate] = useState(
-    () => config.current?.newClientRate ?? hourlyRate
+  // Null until the applicant picks one, so it follows the hourly rate until then. Kept when the
+  // toggle is switched off, so switching it back on doesn't lose their choice.
+  const [customNewClientRate, setCustomNewClientRate] = useState<number | null>(
+    config.current?.newClientRate ?? null
   );
+  const newClientRate = customNewClientRate ?? hourlyRate;
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
+  // Abort an in-flight save if the screen goes away, so we don't navigate from a dead screen.
+  const saveController = useRef<AbortController | null>(null);
+  useEffect(() => () => saveController.current?.abort(), []);
+
   const jobsPerWeek = estimateJobsPerWeek(hourlyRate, config.jobEstimates);
 
+  // A save error describes the values that failed; once they're edited it no longer applies.
+  const handleHourlyRateChange = (rate: number) => {
+    setSubmitError(null);
+    setHourlyRate(rate);
+  };
+
+  const handleNewClientRateChange = (rate: number) => {
+    setSubmitError(null);
+    setCustomNewClientRate(rate);
+  };
+
   const handleCustomRateToggle = (enabled: boolean) => {
-    // Start from the main rate each time it's switched on, as in the design.
-    if (enabled) setNewClientRate(hourlyRate);
+    setSubmitError(null);
     setCustomNewClientRateEnabled(enabled);
   };
 
@@ -105,15 +122,31 @@ const SetRateForm = ({
           }
         : { policy: 'marketing-fee', hourlyRate };
 
+    const controller = new AbortController();
+    saveController.current = controller;
     setSubmitting(true);
     setSubmitError(null);
+
+    let result: { ok: true; saved: SavedRate } | { ok: false; error: unknown };
     try {
-      const saved = await submitRate({ applicantId, request });
-      onSaved(saved);
+      result = {
+        ok: true,
+        saved: await submitRate({ applicantId, request, signal: controller.signal }),
+      };
     } catch (error) {
-      setSubmitError(error instanceof ApiError ? error.message : 'Something went wrong.');
-    } finally {
-      setSubmitting(false);
+      result = { ok: false, error };
+    }
+
+    // Unmounted mid-save: no state updates, and don't navigate on its behalf.
+    if (controller.signal.aborted) return;
+
+    setSubmitting(false);
+    if (result.ok) {
+      onSaved(result.saved);
+    } else {
+      setSubmitError(
+        result.error instanceof ApiError ? result.error.message : 'Something went wrong.'
+      );
     }
   };
 
@@ -133,7 +166,7 @@ const SetRateForm = ({
           <Stepper
             label="Hourly rate"
             value={hourlyRate}
-            onChange={setHourlyRate}
+            onChange={handleHourlyRateChange}
             min={minRate}
             max={maxRate}
             step={step}
@@ -166,7 +199,7 @@ const SetRateForm = ({
               enabled={customNewClientRateEnabled}
               onEnabledChange={handleCustomRateToggle}
               rate={newClientRate}
-              onRateChange={setNewClientRate}
+              onRateChange={handleNewClientRateChange}
               min={minRate}
               max={maxRate}
               step={step}

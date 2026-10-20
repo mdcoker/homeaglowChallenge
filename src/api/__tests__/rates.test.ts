@@ -9,7 +9,7 @@ import {
 
 const applicantId = 'applicant-123';
 
-beforeEach(() => resetMockApi({ latencyMs: 0 }));
+beforeEach(() => resetMockApi({ latencyMs: 0, failFetch: false, failSubmit: false }));
 
 describe('fetchRateConfig', () => {
   it('returns the marketing-fee policy for most states', async () => {
@@ -112,6 +112,22 @@ describe('submitRate', () => {
     });
   });
 
+  it('rejects without saving when aborted', async () => {
+    mockOptions.latencyMs = 60_000;
+    const controller = new AbortController();
+
+    const request = submitRate({
+      applicantId,
+      request: { policy: 'marketing-fee', hourlyRate: 22 },
+      signal: controller.signal,
+    });
+    controller.abort();
+
+    await expect(request).rejects.toThrow('Aborted');
+    mockOptions.latencyMs = 0;
+    expect((await fetchRateConfig({ applicantId, state: 'TX' })).current).toBeNull();
+  });
+
   it('does not save a rejected submission', async () => {
     await submitRate({ applicantId, request: { policy: 'marketing-fee', hourlyRate: 99 } }).catch(
       () => {}
@@ -124,14 +140,32 @@ describe('submitRate', () => {
 });
 
 describe('resetMockApi', () => {
-  it('restores default options and clears the saved rate', async () => {
-    await submitRate({ applicantId, request: { policy: 'marketing-fee', hourlyRate: 22 } });
-    mockOptions.failFetch = true;
+  it('restores the default options', () => {
+    let defaults: typeof mockOptions | undefined;
+    jest.isolateModules(() => {
+      // isolateModules is synchronous, so a dynamic import() won't do.
+      // eslint-disable-next-line @typescript-eslint/no-require-imports
+      defaults = { ...require('../rates').mockOptions };
+    });
+    mockOptions.latencyMs = 1234;
+    mockOptions.failFetch = !mockOptions.failFetch;
 
     resetMockApi();
 
-    expect(mockOptions).toEqual({ latencyMs: 600, failFetch: false, failSubmit: false });
-    resetMockApi({ latencyMs: 0 });
+    expect(mockOptions).toEqual(defaults);
+  });
+
+  it('applies overrides on top of the defaults', () => {
+    resetMockApi({ latencyMs: 5 });
+
+    expect(mockOptions.latencyMs).toBe(5);
+  });
+
+  it('clears the saved rate', async () => {
+    await submitRate({ applicantId, request: { policy: 'marketing-fee', hourlyRate: 22 } });
+
+    resetMockApi({ latencyMs: 0, failFetch: false, failSubmit: false });
+
     expect((await fetchRateConfig({ applicantId, state: 'TX' })).current).toBeNull();
   });
 });

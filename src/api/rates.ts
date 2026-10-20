@@ -63,12 +63,14 @@ export class ApiError extends Error {
 // Mock implementation
 // ---------------------------------------------------------------------------
 
-/** Flip these while developing to exercise the error states. */
-export const mockOptions = {
+const DEFAULT_MOCK_OPTIONS = {
   latencyMs: 600,
   failFetch: false,
   failSubmit: false,
 };
+
+/** Flip these while developing to exercise the error states. */
+export const mockOptions = { ...DEFAULT_MOCK_OPTIONS };
 
 /** Made-up list of states with the alternative new-client pricing rules. */
 const CUSTOM_RATE_STATES = new Set(['CA', 'NY', 'WA']);
@@ -88,6 +90,12 @@ const BASE_CONFIG: Omit<RateConfig, 'newClientPolicy' | 'current'> = {
 };
 
 let savedRate: SavedRate | null = null;
+
+/** Restores the mock's options and forgets any saved rate. Used between tests. */
+export function resetMockApi(overrides: Partial<typeof DEFAULT_MOCK_OPTIONS> = {}) {
+  Object.assign(mockOptions, DEFAULT_MOCK_OPTIONS, overrides);
+  savedRate = null;
+}
 
 function wait(ms: number, signal?: AbortSignal) {
   return new Promise<void>((resolve, reject) => {
